@@ -1,3 +1,7 @@
 /target
 *.lock
 *.data
+*.bullet
+*.nnue
+*.bin
+*.binpack

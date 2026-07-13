@@ -6,10 +6,10 @@ use kf_internals::{
     engine::Engine,
     evaluate::is_material_draw,
 };
-use rand::random_range;
+use rand::{random_range, seq::IndexedRandom};
 use rand::seq::SliceRandom;
 use reporter::DatagenReporter;
-use std::fs::OpenOptions;
+use std::{fs::OpenOptions, io::stdout};
 use std::{
     io::Write,
     sync::mpsc::{Receiver, Sender, channel},
@@ -118,8 +118,8 @@ fn run_games(n_rand: usize, n_pmdfrc: usize, out: Sender<Vec<u8>>) {
 
 fn generate_training_data(threads: usize, total: usize) {
     // Do a 90 - 10 split normal games vs "dfrc"
-    let normals = total * 90 / 100;
-    let pmdfrcs = total / 10;
+    let normals = total * 99 / 100;
+    let pmdfrcs = total / 100;
 
     let t_normal = normals / threads;
     let t_pmdfrc = pmdfrcs / threads;
@@ -142,12 +142,16 @@ fn generate_training_data(threads: usize, total: usize) {
         .open("training.data")
         .unwrap();
 
-    let mut total = 0;
+    let total_len = (total as f64).log10().floor() as usize + 1;
+
+    let mut current = 0;
     for v in rx {
-        total += (v.len() - 36) / 4;
+        current += (v.len() - 36) / 4;
         let _ = out_file.write_all(&v);
-        println!("{total}");
+        print!("\r {current:>total_len$}/{total}");
+        stdout().flush().unwrap();
     }
+    println!();
 }
 
 // Just randomize the backranks, no castling. Should be fine? Mostly to have some data at weird
@@ -158,9 +162,15 @@ fn poor_mans_dfrc() -> Position {
         start_fen.as_bytes_mut()[..8].shuffle(&mut rand::rng());
         start_fen.as_bytes_mut()[35..43].shuffle(&mut rand::rng());
     }
-    Position::from_fen(start_fen).unwrap()
+    let mut pos = Position::from_fen(start_fen).unwrap();
+    let mut moves = MoveList::new();
+    pos.get_moves::<All>(&mut moves);
+    let m = *moves.choose(&mut rand::rng()).unwrap();
+    pos.do_move(m);
+
+    pos
 }
 
 fn main() {
-    generate_training_data(4, 10_000);
+    generate_training_data(4, 2_000_000);
 }
