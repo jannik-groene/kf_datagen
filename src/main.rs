@@ -3,7 +3,7 @@ mod viri;
 
 use kf_internals::{
     chess::{All, Color, Move, MoveList, Position},
-    engine::Engine,
+    engine::{Engine, SearchLimit},
     evaluate::is_material_draw,
 };
 use rand::{random_range, seq::IndexedRandom};
@@ -16,7 +16,7 @@ use std::{
 };
 use viri::{Result, ViriGameData};
 
-const GEN_DEPTH: u8 = 8;
+const GEN_LIMIT: SearchLimit = SearchLimit::Depth(6);
 
 fn is_terminal(pos: &mut Position) -> bool {
     if pos.rule_50_count() >= 100 || pos.is_threefold() || is_material_draw(pos) {
@@ -55,7 +55,7 @@ fn play_game<F: Fn() -> Position>(
     while !is_terminal(&mut pos) {
         let stm = pos.color() as usize;
         players[stm].set_position(pos.clone());
-        players[stm].start_search(Some(GEN_DEPTH), None);
+        players[stm].start_search(GEN_LIMIT);
         let (e, mv) = rx.recv().unwrap();
         game_data.add_move(mv, e * color_muls[stm]);
         pos.do_move(mv);
@@ -68,7 +68,7 @@ fn play_game<F: Fn() -> Position>(
 //Randomly generate a starting position
 fn random_opening() -> Position {
     let mut pos = Position::new();
-    let moves_count = random_range(7..12);
+    let moves_count = random_range(5..12);
 
     let mut moves = MoveList::new();
 
@@ -89,6 +89,34 @@ fn random_opening() -> Position {
     } else {
         pos
     }
+}
+
+fn play_random_move(pos: &mut Position) {
+    let mut moves = MoveList::new();
+    pos.get_moves::<All>(&mut moves);
+    let m = *moves.choose(&mut rand::rng()).unwrap();
+    pos.do_move(m);
+    if is_terminal(pos) {
+        pos.undo_move();
+    }
+}
+
+// Just randomize the backranks, no castling. Should be fine? Mostly to have some data at weird
+// positions.
+fn poor_mans_dfrc() -> Position {
+    let mut start_fen = String::from("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1");
+    unsafe {
+        start_fen.as_bytes_mut()[..8].shuffle(&mut rand::rng());
+        start_fen.as_bytes_mut()[35..43].shuffle(&mut rand::rng());
+    }
+
+    let mut pos = Position::from_fen(start_fen).unwrap();
+    play_random_move(&mut pos);
+    play_random_move(&mut pos);
+    play_random_move(&mut pos);
+    play_random_move(&mut pos);
+
+    pos
 }
 
 fn run_games(n_rand: usize, n_pmdfrc: usize, out: Sender<Vec<u8>>) {
@@ -117,9 +145,9 @@ fn run_games(n_rand: usize, n_pmdfrc: usize, out: Sender<Vec<u8>>) {
 }
 
 fn generate_training_data(threads: usize, total: usize) {
-    // Do a 90 - 10 split normal games vs "dfrc"
-    let normals = total * 99 / 100;
-    let pmdfrcs = total / 100;
+    // Do a 80 - 20 split normal games vs "dfrc"
+    let normals = total * 80 / 100;
+    let pmdfrcs = total / 5;
 
     let t_normal = normals / threads;
     let t_pmdfrc = pmdfrcs / threads;
@@ -136,7 +164,6 @@ fn generate_training_data(threads: usize, total: usize) {
     drop(tx);
 
     let mut out_file = OpenOptions::new()
-        .read(true)
         .create(true)
         .append(true)
         .open("training.data")
@@ -148,29 +175,13 @@ fn generate_training_data(threads: usize, total: usize) {
     for v in rx {
         current += (v.len() - 36) / 4;
         let _ = out_file.write_all(&v);
-        print!("\r {current:>total_len$}/{total}");
+        let perc = current * 100 / total;
+        print!("\r {current:>total_len$}/{total} ({perc:>3}%)");
         stdout().flush().unwrap();
     }
     println!();
 }
 
-// Just randomize the backranks, no castling. Should be fine? Mostly to have some data at weird
-// positions.
-fn poor_mans_dfrc() -> Position {
-    let mut start_fen = String::from("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1");
-    unsafe {
-        start_fen.as_bytes_mut()[..8].shuffle(&mut rand::rng());
-        start_fen.as_bytes_mut()[35..43].shuffle(&mut rand::rng());
-    }
-    let mut pos = Position::from_fen(start_fen).unwrap();
-    let mut moves = MoveList::new();
-    pos.get_moves::<All>(&mut moves);
-    let m = *moves.choose(&mut rand::rng()).unwrap();
-    pos.do_move(m);
-
-    pos
-}
-
 fn main() {
-    generate_training_data(4, 2_000_000);
+    generate_training_data(4, 36_000_000);
 }
